@@ -1,5 +1,5 @@
 /* =========================================================
- *       Filename:  b.c
+ *       Filename:  syn_flood.c
  *
  *    Description:  
  *
@@ -102,6 +102,7 @@ int main(int argc, const char *argv[])
         skfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
         if (skfd < 0)
                 skfd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+        /* herader include */
         setsockopt(skfd, IPPROTO_IP, IP_HDRINCL, "1", sizeof ("1"));
         signal(SIGINT, sig_int);
 
