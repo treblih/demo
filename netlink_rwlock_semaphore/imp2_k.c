@@ -18,11 +18,12 @@
 #include <linux/ip.h>
 #include <linux/netlink.h>
 #include <linux/spinlock.h>
-#include <asm/semaphore.h>
+#include <linux/semaphore.h>
 #include <net/sock.h>
 #include "imp2.h"
 
-DECLARE_MUTEX(receive_sem);
+/* DECLARE_MUTEX(receive_sem); */
+struct semaphore receive_sem = __SEMAPHORE_INITIALIZER(receive_sem, 1);
 
 static struct sock *nlfd;
 
@@ -32,15 +33,15 @@ struct
         rwlock_t lock;
 }user_proc;
 
-static void kernel_receive(struct sock *sk, int len)
+/* in softirq context, no blocking */
+static void kernel_receive(struct sk_buff *skb)
 {
         do
         {
-                struct sk_buff *skb;
                 if(down_trylock(&receive_sem))
                         return;
 
-                while((skb = skb_dequeue(&sk->receive_queue)) != NULL)
+                while(skb != NULL)
                 {
                         {
                                 struct nlmsghdr *nlh = NULL;
@@ -53,16 +54,16 @@ static void kernel_receive(struct sock *sk, int len)
                                         {
                                                 if(nlh->nlmsg_type == IMP2_U_PID)
                                                 {
-                                                        write_lock_bh(&user_proc.pid);
+                                                        write_lock_bh(&user_proc.lock);
                                                         user_proc.pid = nlh->nlmsg_pid;
-                                                        write_unlock_bh(&user_proc.pid);
+                                                        write_unlock_bh(&user_proc.lock);
                                                 }
                                                 else if(nlh->nlmsg_type == IMP2_CLOSE)
                                                 {
-                                                        write_lock_bh(&user_proc.pid);
+                                                        write_lock_bh(&user_proc.lock);
                                                         if(nlh->nlmsg_pid == user_proc.pid)
                                                                 user_proc.pid = 0;
-                                                        write_unlock_bh(&user_proc.pid);
+                                                        write_unlock_bh(&user_proc.lock);
                                                 }
                                         }
                                 }
@@ -70,7 +71,7 @@ static void kernel_receive(struct sock *sk, int len)
                         kfree_skb(skb);
                 }
                 up(&receive_sem);
-        }while(nlfd && nlfd->receive_queue.qlen);
+        }while(nlfd && nlfd->sk_receive_queue.qlen);
 }
 
 static int send_to_user(struct packet_info *info)
@@ -84,6 +85,7 @@ static int send_to_user(struct packet_info *info)
 
         size = NLMSG_SPACE(sizeof(*info));
 
+        /* ATOMIC, nonblocking */
         skb = alloc_skb(size, GFP_ATOMIC);
         old_tail = skb->tail;
 
@@ -95,7 +97,7 @@ static int send_to_user(struct packet_info *info)
         packet->dest = info->dest;
 
         nlh->nlmsg_len = skb->tail - old_tail;
-        NETLINK_CB(skb).dst_groups = 0;
+        NETLINK_CB(skb).dst_group = 0;
 
         read_lock_bh(&user_proc.lock);
         ret = netlink_unicast(nlfd, skb, user_proc.pid, MSG_DONTWAIT);
@@ -110,12 +112,12 @@ nlmsg_failure:
 }
 
 static unsigned int get_icmp(unsigned int hook,
-                struct sk_buff **pskb,
+                struct sk_buff *skb,
                 const struct net_device *in,
                 const struct net_device *out,
                 int (*okfn)(struct sk_buff *))
 {
-        struct iphdr *iph = (*pskb)->nh.iph;
+        struct iphdr *iph = ip_hdr(skb);
         struct packet_info info;
 
         if(iph->protocol == IPPROTO_ICMP)
@@ -139,7 +141,7 @@ static struct nf_hook_ops imp2_ops =
 {
         .hook = get_icmp,
         .pf = PF_INET,
-        .hooknum = NF_IP_PRE_ROUTING,
+        .hooknum = 0,   /* NF_IP_PRE_ROUTING */
         .priority = NF_IP_PRI_FILTER -1,
 };
 
@@ -147,7 +149,8 @@ static int __init init(void)
 {
         rwlock_init(&user_proc.lock);
 
-        nlfd = netlink_kernel_create(NL_IMP2, kernel_receive);
+        nlfd = netlink_kernel_create(NULL, NL_IMP2, 0, kernel_receive,
+                                     NULL, THIS_MODULE);
         if(!nlfd)
         {
                 printk("can not create a netlink socket\n");
@@ -161,10 +164,11 @@ static void __exit fini(void)
 {
         if(nlfd)
         {
-                sock_release(nlfd->socket);
+                sock_release(nlfd->sk_socket);
         }
         nf_unregister_hook(&imp2_ops);
 }
 
 module_init(init);
 module_exit(fini);
+MODULE_LICENSE("GPL");
