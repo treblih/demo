@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
@@ -30,7 +31,7 @@ void sig_int(int signo)
         exit(0);
 }
 
-void sleep_1(unsigned secs)
+void msleep(unsigned secs)
 {
         struct timeval tval;
         tval.tv_sec = secs / 1000;
@@ -43,7 +44,7 @@ inline long getrandom(int min, int max)
         return ((rand() % (int)((max + 1) - min)) + min);
 }
 
-unsigned short ip_sum (unsigned short *addr, int len)
+unsigned short ip_sum(unsigned short *addr, int len)
 {
         register int nleft = len;
         register unsigned short *w = addr;
@@ -94,6 +95,7 @@ int main(int argc, const char *argv[])
         srand(time(NULL));
         int ret;
         int i;
+        struct in_addr tmp;
         struct sockaddr_in sin;
         struct iphdr *ih = (struct iphdr *)buf;
         struct tcphdr *th = (struct tcphdr *)(buf + sizeof(struct iphdr));
@@ -117,13 +119,14 @@ int main(int argc, const char *argv[])
                 ih->ttl = getrandom(200, 255);
                 ih->protocol = 6;
                 /* ih->sum = 0; */
-                ih->saddr = getrandom(0, 65535) + (getrandom(0, 65535) << 8);
+                /* getrandom(0, 65535), no need hton */
+                ih->saddr = getrandom(0, 65535) + (getrandom(0, 65535) << 16);
                 /* ih->saddr = 1711909056; */
                 ih->daddr = 1980344512;
-                th->source = htons(getrandom(0, 65535));
-                th->dest = htons(getrandom(0, 65535));
-                th->seq = htonl(getrandom(0, 65535) + (getrandom(0, 65535) << 8));
-                th->ack_seq = htons(getrandom(0, 65535));
+                th->source = getrandom(0, 65535);
+                th->dest = getrandom(0, 65535);
+                th->seq = getrandom(0, 65535) + (getrandom(0, 65535) << 8);
+                th->ack_seq = getrandom(0, 65535);
 #if 0
                 th->source = htons(7777);
                 th->dest = htons(8888);
@@ -135,7 +138,7 @@ int main(int argc, const char *argv[])
                 th->check = 0;
                 /* 4 * 5 = 20 bytes */
                 th->doff = 5;
-                th->urg_ptr = htons(getrandom(0, 65535));
+                th->urg_ptr = getrandom(0, 65535);
                 /* th->window = htons(getrandom(0, 65535)); */
                 th->window = htons(1000);
                 th->check = ip_sum((unsigned short *)buf, (sizeof(struct iphdr) + sizeof(struct tcphdr) + 1) & ~1);
@@ -165,14 +168,16 @@ int main(int argc, const char *argv[])
                         /* 40 for ip & tcp header */
                         buf[40 + i] = 0x61 + i;
                 }
+                tmp.s_addr = ih->saddr;
+                printf("%u\t\t%s\n", ih->saddr, inet_ntoa(tmp));
                 /* ip->tot_len is net order now */
-                ret = sendto(skfd, buf, 40 + DATASIZE, 0, (struct sockaddr_in *) &sin, sizeof(sin));
+                ret = sendto(skfd, buf, 40 + DATASIZE, 0, (struct sockaddr *)&sin, sizeof(sin));
                 if (ret < 0) {
                         perror("sendto ");
                 } else {
-                        fprintf(stderr, "%d bytes sent\n", ret);
+                        /* fprintf(stderr, "%d bytes sent\n", ret); */
                 }
-                /* sleep_1(50); */
+                msleep(500);
                 /* sleep(1); */
         }
         return 0;
