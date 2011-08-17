@@ -21,12 +21,15 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/select.h>
+#include <ifaddrs.h>
 
 static int skfd; 
 static char buf[2048];
+static struct ifaddrs *ifa;
 
 void sig_int(int signo)
 {
+        freeifaddrs(ifa);
         close(skfd);
         exit(0);
 }
@@ -95,10 +98,22 @@ int main(int argc, const char *argv[])
         srand(time(NULL));
         int ret;
         int i;
-        struct in_addr tmp;
+        struct in_addr addr;
         struct sockaddr_in sin;
         struct iphdr *ih = (struct iphdr *)buf;
         struct tcphdr *th = (struct tcphdr *)(buf + sizeof(struct iphdr));
+        struct ifaddrs *tmp;
+
+        if (getifaddrs(&ifa)) {
+                perror("getifaddrs: ");
+        }
+        for (tmp = ifa; tmp; tmp = tmp->ifa_next) {
+                /* ignore loopback */
+                if (tmp->ifa_addr->sa_family == AF_INET && !strncmp(tmp->ifa_name, "eth", 3)) {
+                        ih->saddr = ((struct sockaddr_in *)(tmp->ifa_addr))->sin_addr.s_addr;
+                        break;
+                }
+        }
 
         /* can only send msg */
         skfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
@@ -120,9 +135,15 @@ int main(int argc, const char *argv[])
                 ih->protocol = 6;
                 /* ih->sum = 0; */
                 /* getrandom(0, 65535), no need hton */
-                ih->saddr = getrandom(0, 65535) + (getrandom(0, 65535) << 16);
+                /* ih->saddr = getrandom(0, 65535) + (getrandom(0, 65535) << 16); */
+                /* ih->saddr = 1946746880 + getrandom(0, 65535); */
                 /* ih->saddr = 1711909056; */
-                ih->daddr = 1980344512;
+                /* 255.255.255.127 */
+                /* ih->saddr = 2147483647; */
+                /* 0.0.0.128 */
+                /* ih->saddr = 2147483648; */
+                /* 192.168.9.117 */
+                ih->daddr = 1963567296;
                 th->source = getrandom(0, 65535);
                 th->dest = getrandom(0, 65535);
                 th->seq = getrandom(0, 65535) + (getrandom(0, 65535) << 8);
@@ -140,7 +161,7 @@ int main(int argc, const char *argv[])
                 th->doff = 5;
                 th->urg_ptr = getrandom(0, 65535);
                 /* th->window = htons(getrandom(0, 65535)); */
-                th->window = htons(1000);
+                th->window = getrandom(0, 65535);
                 th->check = ip_sum((unsigned short *)buf, (sizeof(struct iphdr) + sizeof(struct tcphdr) + 1) & ~1);
                 ih->check = ip_sum((unsigned short *)buf, (4 * ih->ihl + sizeof(struct tcphdr) + 1) & ~1);
                 sin.sin_family = AF_INET;
@@ -168,16 +189,17 @@ int main(int argc, const char *argv[])
                         /* 40 for ip & tcp header */
                         buf[40 + i] = 0x61 + i;
                 }
-                tmp.s_addr = ih->saddr;
-                printf("%u\t\t%s\n", ih->saddr, inet_ntoa(tmp));
+                addr.s_addr = ih->saddr;
+                printf("%u\t\t%s\n", ih->saddr, inet_ntoa(addr));
                 /* ip->tot_len is net order now */
-                ret = sendto(skfd, buf, 40 + DATASIZE, 0, (struct sockaddr *)&sin, sizeof(sin));
+                /* ret = sendto(skfd, buf, 40 + DATASIZE, 0, (struct sockaddr *)&sin, sizeof(sin)); */
+                ret = sendto(skfd, buf, 40 + getrandom(0, 100), 0, (struct sockaddr *)&sin, sizeof(sin));
                 if (ret < 0) {
                         perror("sendto ");
                 } else {
                         /* fprintf(stderr, "%d bytes sent\n", ret); */
                 }
-                msleep(500);
+                msleep(10);
                 /* sleep(1); */
         }
         return 0;
