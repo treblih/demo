@@ -27,6 +27,14 @@
 static int skfd; 
 static struct ifaddrs *ifa;
 
+struct psd_header {
+        unsigned source;
+        unsigned dest;
+        unsigned char empty;
+        unsigned char proto;
+        unsigned short len;
+};
+
 void sig_int(int signo)
 {
         freeifaddrs(ifa);
@@ -47,20 +55,41 @@ inline long getrandom(int min, int max)
         return ((rand() % (int)((max + 1) - min)) + min);
 }
 
-unsigned short ip_sum(unsigned short *addr, int len)
+unsigned short checksum_ip(unsigned short *addr, int len)
 {
-        register int nleft = len;
-        register unsigned short *w = addr;
-        register int sum = 0;
+        int sum = 0;
         unsigned short answer = 0;
 
-        while (nleft > 1) {
-                sum += *w++;
-                nleft -= 2;
+        while (len > 1) {
+                sum += *addr++;
+                len -= 2;
         }
-        if (nleft == 1) {
-                *(unsigned char *) (&answer) = *(unsigned char *) w;
-                sum += answer;
+        if (len == 1) {
+                sum += *(unsigned char *)addr;
+        }
+        sum = (sum >> 16) + (sum & 0xffff);
+        sum += (sum >> 16);
+        answer = ~sum;
+        return answer;
+}
+
+unsigned short checksum_udp(unsigned short *psd, int psd_len, unsigned short *udphdr, int len)
+{
+        int sum = 0;
+        int i;
+        unsigned short answer = 0;
+
+        while (psd_len > 0) {
+                sum += *psd++;
+                psd_len -= 2;
+        }
+
+        while (len > 1) {
+                sum += *udphdr++;
+                len -= 2;
+        }
+        if (len == 1) {
+                sum += *(unsigned char *)udphdr;
         }
         sum = (sum >> 16) + (sum & 0xffff);
         sum += (sum >> 16);
@@ -102,6 +131,8 @@ int main(int argc, const char *argv[])
         int ret;
         int i;
         int payload = 0;
+        int forge_payload = 1;
+        int forge_sip = 1;
         int oc;
         char *opt_arg;
         struct in_addr addr;
@@ -110,6 +141,10 @@ int main(int argc, const char *argv[])
         struct iphdr *ih = (struct iphdr *)buf;
         struct udphdr *uh = (struct udphdr *)(buf + sizeof(struct iphdr));
         struct ifaddrs *tmp;
+        struct psd_header psd_header;
+
+        psd_header.empty = 0;
+        psd_header.proto = 0x11;
 
         if (1 == argc) {usage();}
         srand(time(NULL));
@@ -134,7 +169,7 @@ int main(int argc, const char *argv[])
         setsockopt(skfd, IPPROTO_IP, IP_HDRINCL, "1", sizeof ("1"));
         signal(SIGINT, sig_int);
 
-        while ((oc = getopt(argc, argv, ":p:d:")) != -1) {
+        while ((oc = getopt(argc, argv, ":p:d:s:")) != -1) {
                 switch (oc) {
                 case 'p':
                         payload = atoi(optarg);
@@ -148,6 +183,12 @@ int main(int argc, const char *argv[])
                                 payload = 1458;
                         }
                         printf(D_BLUE "Demand payload size: %d\n" D_NONE, payload);
+                        forge_payload = 0;
+                        break;
+                case 's':
+                        ih->saddr = inet_addr(optarg);
+                        printf(D_BLUE "src IP: %s, net order: %u\n" D_NONE, optarg, inet_addr(optarg));
+                        forge_sip = 0;
                         break;
                 case 'd':
                         ih->daddr = inet_addr(optarg);
@@ -175,20 +216,23 @@ int main(int argc, const char *argv[])
         /* ih->daddr = 252291264; */
         /* 192.168.9.117 */
         /* ih->daddr = 1963567296; */
+        ih->version = 4;
+        ih->ihl = 5;
+        ih->tos = 0x00;
+        ih->frag_off = 0;
+        ih->protocol = IPPROTO_UDP;
         while (1) {
-                /* payload = getrandom(0, 100); */
-                ih->version = 4;
-                ih->ihl = 5;
-                ih->tos = 0x00;
+                if (forge_payload) {
+                        payload = getrandom(0, 200);
+                }
                 ih->tot_len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + payload) ;
                 ih->id = htons(getrandom(1024, 65535));
-                ih->frag_off = 0;
-                /* ih->ttl = getrandom(200, 255); */
-                ih->ttl = 10;
-                ih->protocol = IPPROTO_UDP;
                 /* ih->sum = 0; */
+                ih->ttl = getrandom(1, 63);
                 /* getrandom(0, 65535), no need hton */
-                ih->saddr = getrandom(0, 65536) + (getrandom(0, 65535) << 16);
+                if (forge_sip) {
+                        ih->saddr = getrandom(0, 65536) + (getrandom(0, 65535) << 16);
+                }
                 /* ih->saddr = getrandom(0, 65536) + (getrandom(0, 65535) << 8); */
                 /* ih->saddr = getrandom(0, 65536); */
                 /* ih->saddr = 1946746880 + getrandom(0, 65535); */
@@ -198,6 +242,8 @@ int main(int argc, const char *argv[])
                 /* ih->saddr = 2181671104; */
                 /* 192.168.9.30 */
                 /* ih->saddr = 503949504; */
+                /* 192.168.9.4 */
+                /* ih->saddr = 67741888; */
                 /* 0.0.0.128 */
                 /* ih->saddr = 2147483648; */
                 /* 192.168.10.10 */
@@ -208,8 +254,16 @@ int main(int argc, const char *argv[])
                 uh->source = getrandom(0, 65535);
                 uh->dest = getrandom(0, 65535);
                 uh->len = htons(sizeof(struct udphdr) + payload);
-                uh->check = ip_sum((unsigned short *)buf, (sizeof(struct udphdr) + 1) & ~1);
-                ih->check = ip_sum((unsigned short *)buf, (4 * ih->ihl + sizeof(struct udphdr) + 1) & ~1);
+
+                ih->check = uh->check = 0;
+                /* ip checksum */
+                ih->check = checksum_ip(buf, sizeof(struct iphdr));
+                /* udp checksum */
+                psd_header.source = ih->saddr;
+                psd_header.dest = ih->daddr;
+                psd_header.len = uh->len; /* 've been net order yet */
+                uh->check = checksum_udp(&psd_header, sizeof(struct psd_header), uh, ntohs(uh->len));
+
                 sin.sin_family = AF_INET;
                 sin.sin_port = uh->dest;
                 sin.sin_addr.s_addr = ih->daddr;
